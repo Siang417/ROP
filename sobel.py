@@ -167,7 +167,7 @@ binary = np.zeros_like(sobel_eq)
 binary[(sobel_eq >= 250)] = 255
 
 cv2.imshow('binary', binary)
-cv2.imwrite('binary.png', binary)
+# cv2.imwrite('binary.png', binary)
 
 # 形態學操作：先侵蝕再膨脹
 # 這樣可以去除小的噪點，並平滑邊
@@ -178,17 +178,107 @@ for i in range(5):  # 重複兩次侵蝕和膨脹
     binary = cv2.erode(binary, kernel, iterations=1)    # 先侵蝕
 
 cv2.imshow('binary_dilated', binary)
-cv2.imwrite('binary_dilated.png', binary)
+# cv2.imwrite('binary_dilated.png', binary)
 
-# 連通元件
+# 連通元件分析
 contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 max_contour = max(contours, key=cv2.contourArea)  # 找最大面積的輪廓
 area = cv2.contourArea(max_contour)               # 最大面積
-# 在原圖上沿著最大連通元件畫紅色輪廓線
+
+# 創建最大連通元件的遮罩
+mask = np.zeros(binary.shape, dtype=np.uint8)
+cv2.fillPoly(mask, [max_contour], 255)
+
+# 獲取連通元件內的像素位置
+component_pixels = np.where(mask == 255)
+component_coords = list(zip(component_pixels[0], component_pixels[1]))
+
+print(f"連通元件包含 {len(component_coords)} 個像素")
+
+# 基於區域成長的方法：使用原始影像強度進行擴展
+def region_growing(original_img, seed_coords, intensity_threshold=15):
+    """
+    基於影像強度的區域成長算法
+    """
+    h, w = original_img.shape
+    visited = np.zeros((h, w), dtype=bool)
+    result_mask = np.zeros((h, w), dtype=np.uint8)
+    
+    # 計算種子區域的平均強度
+    seed_intensities = [original_img[y, x] for y, x in seed_coords]
+    mean_intensity = np.mean(seed_intensities)
+    
+    print(f"種子區域平均強度: {mean_intensity:.2f}")
+    
+    # 使用BFS進行區域成長
+    from collections import deque
+    queue = deque(seed_coords)
+    
+    # 標記種子點
+    for y, x in seed_coords:
+        visited[y, x] = True
+        result_mask[y, x] = 255
+    
+    # 8-連通的鄰域
+    directions = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+    
+    while queue:
+        current_y, current_x = queue.popleft()
+        current_intensity = original_img[current_y, current_x]
+        
+        # 檢查8個鄰域
+        for dy, dx in directions:
+            ny, nx = current_y + dy, current_x + dx
+            
+            # 檢查邊界
+            if 0 <= ny < h and 0 <= nx < w and not visited[ny, nx]:
+                neighbor_intensity = original_img[ny, nx]
+                
+                # 檢查強度差異
+                intensity_diff = abs(float(neighbor_intensity) - float(mean_intensity))
+                
+                if intensity_diff <= intensity_threshold:
+                    visited[ny, nx] = True
+                    result_mask[ny, nx] = 255
+                    queue.append((ny, nx))
+    
+    return result_mask
+
+# 應用區域成長到原始灰階影像
+print("開始基於影像強度的區域成長...")
+grown_mask = region_growing(img, component_coords, intensity_threshold=20)
+
+print(f"區域成長後包含 {np.sum(grown_mask == 255)} 個像素")
+print(f"擴展比例: {np.sum(grown_mask == 255) / len(component_coords):.2f}x")
+
+# 可選：對成長後的結果進行形態學平滑
+kernel_smooth = np.ones((3, 3), np.uint8)
+grown_mask_smoothed = cv2.morphologyEx(grown_mask, cv2.MORPH_CLOSE, kernel_smooth)
+grown_mask_smoothed = cv2.morphologyEx(grown_mask_smoothed, cv2.MORPH_OPEN, kernel_smooth)
+
+# 顯示結果比較
+cv2.imshow('Original Connected Component', mask)
+cv2.imshow('Region Growing Result', grown_mask)
+cv2.imshow('Region Growing Smoothed', grown_mask_smoothed)
+
+# 在原圖上顯示結果
 img_color = img_original.copy()
-cv2.drawContours(img_color, [max_contour], -1, (255, 0, 0), 2)  # 紅色線
-cv2.imshow('Max Contour on Original', img_color)
-cv2.imwrite('max_contour_on_original.png', img_color)
+
+# 繪製原始連通元件（紅色）
+cv2.drawContours(img_color, [max_contour], -1, (0, 0, 255), 2)
+
+# 繪製區域成長結果（綠色）
+grown_contours, _ = cv2.findContours(grown_mask_smoothed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+if grown_contours:
+    largest_grown = max(grown_contours, key=cv2.contourArea)
+    cv2.drawContours(img_color, [largest_grown], -1, (0, 255, 0), 2)
+
+cv2.imshow('Comparison: Red=Original, Green=Region Growing', img_color)
+
+# 保存結果
+# cv2.imwrite('original_component.png', mask)
+# cv2.imwrite('region_growing_result.png', grown_mask_smoothed)
+# cv2.imwrite('comparison_result.png', img_color)
 
 
 

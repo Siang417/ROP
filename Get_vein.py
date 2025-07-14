@@ -185,10 +185,10 @@ def analyze_all_channels(image, mask):
 
 def sobel_vessel_detection(image, mask, selected_channel):
     """
-    使用Sobel邊緣檢測方法進行改良的血管檢測
-    輸入: 原始影像 + 遮罩 + 選定的通道
+    改進版Sobel邊緣檢測方法進行血管檢測
+    改進：統一使用最佳通道，調整處理順序
     """
-    # 使用選定的通道
+    # 使用選定的最佳通道
     if selected_channel is not None:
         gray = selected_channel.copy()
     else:
@@ -214,8 +214,11 @@ def sobel_vessel_detection(image, mask, selected_channel):
     # 結合X + Y邊緣
     sobel_combined = cv2.addWeighted(sobel_x, 0.5, sobel_y, 0.5, 0)
     
-    # 步驟3：抑制高強度邊緣（移除視神經盤等強邊緣）
-    sobel_processed = sobel_combined.copy()
+    # 步驟3：先進行直方圖均衡化（改進：提前增強對比度）
+    sobel_eq = cv2.equalizeHist(sobel_combined)
+    
+    # 步驟4：抑制高強度邊緣（移除視神經盤等強邊緣）
+    sobel_processed = sobel_eq.copy()
     coords = np.column_stack(np.where(sobel_processed >= 120))
     r = 3  # 抑制半徑
     
@@ -226,7 +229,7 @@ def sobel_vessel_detection(image, mask, selected_channel):
         y2 = min(y + r + 1, sobel_processed.shape[0])
         sobel_processed[y1:y2, x1:x2] = 0
     
-    # 步驟4：統計像素移除（移除最低50%像素值）
+    # 步驟5：統計像素移除（移除最低50%像素值）
     pixel_counts = np.bincount(sobel_processed.flatten(), minlength=256)
     total_pixels = sobel_processed.size
     pixels_to_remove = int(total_pixels * 0.5)
@@ -242,18 +245,9 @@ def sobel_vessel_detection(image, mask, selected_channel):
     
     sobel_processed[sobel_processed <= threshold_value] = 0
     
-    # 步驟5：對5-255範圍內的像素進行直方圖均衡化
-    mask_eq = (sobel_processed >= 5) & (sobel_processed <= 255)
-    sobel_eq = sobel_processed.copy()
-    
-    if np.any(mask_eq):
-        roi = sobel_processed[mask_eq]
-        roi_eq = cv2.equalizeHist(roi.reshape(-1, 1).astype(np.uint8)).flatten()
-        sobel_eq[mask_eq] = roi_eq
-    
     # 步驟6：二值化閾值處理（保留像素值 >= 250）
-    binary = np.zeros_like(sobel_eq)
-    binary[sobel_eq >= 250] = 255
+    binary = np.zeros_like(sobel_processed)
+    binary[sobel_processed >= 250] = 255
     
     # 步驟7：形態學操作
     kernel = np.ones((3, 3), np.uint8)
@@ -267,10 +261,10 @@ def sobel_vessel_detection(image, mask, selected_channel):
     
     return binary, sobel_combined, sobel_processed, sobel_eq, threshold_value
 
-def channel_vessel_detection(image, mask, selected_channel):
+def channel_vessel_detection(image, mask, selected_channel, k_value=1.5):
     """
-    基於選定通道的血管檢測方法
-    輸入: 原始影像 + 遮罩 + 選定的通道
+    改進版基於選定通道的血管檢測方法
+    改進：使用k=1.5提高精確度，調整處理順序
     """
     if selected_channel is not None:
         channel = selected_channel.copy()
@@ -283,219 +277,349 @@ def channel_vessel_detection(image, mask, selected_channel):
     # 應用遮罩
     channel = channel * (mask / 255.0)
     
-    # 應用CLAHE
+    # 步驟1：應用CLAHE增強對比度（改進：提前增強）
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(channel.astype(np.uint8))
+    channel_enhanced = clahe.apply(channel.astype(np.uint8))
     
-    # 高斯模糊
-    blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
+    # 步驟2：邊緣檢測
+    sobel_x = cv2.Sobel(channel_enhanced, cv2.CV_64F, 1, 0, ksize=3)
+    sobel_y = cv2.Sobel(channel_enhanced, cv2.CV_64F, 0, 1, ksize=3)
+    edges = np.sqrt(sobel_x**2 + sobel_y**2)
+    edges = np.uint8(edges / edges.max() * 255)
     
-    # 自適應閾值
-    mask_bool = mask > 0
-    if np.sum(mask_bool) > 0:
-        mean_val = np.mean(blurred[mask_bool])
-        std_val = np.std(blurred[mask_bool])
-        threshold_val = max(mean_val - 1.0 * std_val, 0)
+    # 步驟3：邊緣抑制（移除強邊緣）
+    edges_suppressed = edges.copy()
+    coords = np.column_stack(np.where(edges >= 120))
+    r = 3
+    
+    for y, x in coords:
+        x1 = max(x - r, 0)
+        x2 = min(x + r + 1, edges_suppressed.shape[1])
+        y1 = max(y - r, 0)
+        y2 = min(y + r + 1, edges_suppressed.shape[0])
+        edges_suppressed[y1:y2, x1:x2] = 0
+    
+    # 步驟4：統計移除（移除最低50%）
+    pixel_counts = np.bincount(edges_suppressed.flatten(), minlength=256)
+    total_pixels = edges_suppressed.size
+    pixels_to_remove = int(total_pixels * 0.5)
+    
+    cumulative_count = 0
+    statistical_threshold = 0
+    
+    for pixel_value in range(256):
+        cumulative_count += pixel_counts[pixel_value]
+        if cumulative_count >= pixels_to_remove:
+            statistical_threshold = pixel_value
+            break
+    
+    edges_suppressed[edges_suppressed <= statistical_threshold] = 0
+    
+    # 步驟5：再次直方圖均衡化（進一步增強）
+    if np.max(edges_suppressed) > 0:
+        edges_final = cv2.equalizeHist(edges_suppressed)
     else:
-        threshold_val = 100
+        edges_final = edges_suppressed
     
-    vessel_mask = (blurred < threshold_val) & (mask > 0)
-    vessel_mask = vessel_mask.astype(np.uint8) * 255
+    # 步驟6：自適應閾值（使用k=1.5）
+    masked_pixels = channel_enhanced[mask > 0]
+    if len(masked_pixels) > 0:
+        mean_val = np.mean(masked_pixels)
+        std_val = np.std(masked_pixels)
+        adaptive_threshold = mean_val - k_value * std_val  # 使用k=1.5
+        
+        print(f"自適應閾值參數: 平均值={mean_val:.2f}, 標準差={std_val:.2f}")
+        print(f"計算閾值 (k={k_value}): {adaptive_threshold:.2f}")
+    else:
+        adaptive_threshold = 128
+    
+    # 二值化
+    binary = np.zeros_like(channel_enhanced)
+    binary[channel_enhanced < adaptive_threshold] = 255
+    binary = cv2.bitwise_and(binary, mask)
     
     # 形態學操作
-    vessel_mask = morphology.binary_opening(vessel_mask, morphology.disk(1))
-    vessel_mask = morphology.binary_closing(vessel_mask, morphology.disk(2))
-    vessel_mask = vessel_mask.astype(np.uint8) * 255
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
     
-    return vessel_mask, enhanced, threshold_val
+    return binary, channel_enhanced, edges_final, adaptive_threshold
 
-def process_retinal_image():
+def calculate_performance_metrics(binary_result, mask):
     """
-    主要處理函數，使用改良的血管檢測方法
+    計算血管檢測性能指標
     """
-    print("🔬 增強型眼底血管分割系統 v2.0")
+    # 計算檢測到的血管像素數量
+    vessel_pixels = np.sum(binary_result == 255)
+    total_roi_pixels = np.sum(mask == 255)
+    
+    # 血管覆蓋率
+    vessel_coverage = (vessel_pixels / total_roi_pixels * 100) if total_roi_pixels > 0 else 0
+    
+    # 連通區域分析
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary_result, connectivity=8)
+    
+    # 過濾小區域（面積 < 10像素）
+    large_components = stats[stats[:, cv2.CC_STAT_AREA] >= 10]
+    num_vessels = len(large_components) - 1  # 減去背景
+    
+    metrics = {
+        'vessel_pixels': vessel_pixels,
+        'vessel_coverage': vessel_coverage,
+        'num_vessels': max(0, num_vessels),
+        'total_roi_pixels': total_roi_pixels
+    }
+    
+    return metrics
+
+def display_results(original, mask, best_channel, best_channel_name, channel_results, 
+                   sobel_results, channel_detection_results, sobel_metrics, channel_metrics):
+    """
+    顯示改進版檢測結果
+    """
+    fig = plt.figure(figsize=(20, 16))
+    
+    # 第一行：原始影像和通道分析
+    plt.subplot(4, 5, 1)
+    plt.imshow(original)
+    plt.title('原始眼底影像', fontsize=12, fontweight='bold')
+    plt.axis('off')
+    
+    plt.subplot(4, 5, 2)
+    plt.imshow(mask, cmap='gray')
+    plt.title('眼球區域遮罩', fontsize=12)
+    plt.axis('off')
+    
+    plt.subplot(4, 5, 3)
+    plt.imshow(best_channel, cmap='gray')
+    plt.title(f'最佳通道: {best_channel_name}', fontsize=12, fontweight='bold', color='red')
+    plt.axis('off')
+    
+    # 通道分析結果
+    plt.subplot(4, 5, 4)
+    channels = list(channel_results.keys())
+    scores = [channel_results[ch]['score'] for ch in channels]
+    colors = ['red', 'green', 'blue']
+    bars = plt.bar(channels, scores, color=colors, alpha=0.7)
+    plt.title('通道評分比較', fontsize=12)
+    plt.ylabel('綜合評分')
+    plt.xticks(rotation=45)
+    
+    # 標記最佳通道
+    best_idx = channels.index(best_channel_name)
+    bars[best_idx].set_edgecolor('black')
+    bars[best_idx].set_linewidth(3)
+    
+    # 性能指標比較
+    plt.subplot(4, 5, 5)
+    methods = ['Sobel方法', '通道方法']
+    coverages = [sobel_metrics['vessel_coverage'], channel_metrics['vessel_coverage']]
+    vessel_counts = [sobel_metrics['num_vessels'], channel_metrics['num_vessels']]
+    
+    x = np.arange(len(methods))
+    width = 0.35
+    
+    plt.bar(x - width/2, coverages, width, label='血管覆蓋率(%)', alpha=0.8)
+    plt.bar(x + width/2, vessel_counts, width, label='血管數量', alpha=0.8)
+    
+    plt.xlabel('檢測方法')
+    plt.ylabel('數值')
+    plt.title('性能指標比較', fontsize=12)
+    plt.xticks(x, methods)
+    plt.legend()
+    
+    # 第二行：Sobel方法處理過程
+    sobel_binary, sobel_combined, sobel_processed, sobel_eq, sobel_threshold = sobel_results
+    
+    plt.subplot(4, 5, 6)
+    plt.imshow(sobel_combined, cmap='gray')
+    plt.title('Sobel邊緣檢測', fontsize=11)
+    plt.axis('off')
+    
+    plt.subplot(4, 5, 7)
+    plt.imshow(sobel_eq, cmap='gray')
+    plt.title('直方圖均衡化', fontsize=11)
+    plt.axis('off')
+    
+    plt.subplot(4, 5, 8)
+    plt.imshow(sobel_processed, cmap='gray')
+    plt.title('邊緣抑制+統計移除', fontsize=11)
+    plt.axis('off')
+    
+    plt.subplot(4, 5, 9)
+    plt.imshow(sobel_binary, cmap='gray')
+    plt.title('Sobel最終結果', fontsize=11, fontweight='bold')
+    plt.axis('off')
+    
+    plt.subplot(4, 5, 10)
+    plt.text(0.1, 0.8, f'統計閾值: {sobel_threshold}', fontsize=10, transform=plt.gca().transAxes)
+    plt.text(0.1, 0.6, f'血管覆蓋率: {sobel_metrics["vessel_coverage"]:.2f}%', fontsize=10, transform=plt.gca().transAxes)
+    plt.text(0.1, 0.4, f'檢測血管數: {sobel_metrics["num_vessels"]}', fontsize=10, transform=plt.gca().transAxes)
+    plt.text(0.1, 0.2, f'血管像素數: {sobel_metrics["vessel_pixels"]}', fontsize=10, transform=plt.gca().transAxes)
+    plt.title('Sobel方法指標', fontsize=11)
+    plt.axis('off')
+    
+    # 第三行：通道方法處理過程
+    channel_binary, channel_enhanced, channel_edges, adaptive_threshold = channel_detection_results
+    
+    plt.subplot(4, 5, 11)
+    plt.imshow(channel_enhanced, cmap='gray')
+    plt.title('CLAHE增強', fontsize=11)
+    plt.axis('off')
+    
+    plt.subplot(4, 5, 12)
+    plt.imshow(channel_edges, cmap='gray')
+    plt.title('邊緣處理+均衡化', fontsize=11)
+    plt.axis('off')
+    
+    plt.subplot(4, 5, 13)
+    plt.imshow(channel_binary, cmap='gray')
+    plt.title(f'通道方法結果 (k=1.5)', fontsize=11, fontweight='bold')
+    plt.axis('off')
+    
+    plt.subplot(4, 5, 14)
+    plt.text(0.1, 0.8, f'自適應閾值: {adaptive_threshold:.2f}', fontsize=10, transform=plt.gca().transAxes)
+    plt.text(0.1, 0.6, f'血管覆蓋率: {channel_metrics["vessel_coverage"]:.2f}%', fontsize=10, transform=plt.gca().transAxes)
+    plt.text(0.1, 0.4, f'檢測血管數: {channel_metrics["num_vessels"]}', fontsize=10, transform=plt.gca().transAxes)
+    plt.text(0.1, 0.2, f'血管像素數: {channel_metrics["vessel_pixels"]}', fontsize=10, transform=plt.gca().transAxes)
+    plt.title('通道方法指標', fontsize=11)
+    plt.axis('off')
+    
+    # 第四行：結果比較
+    plt.subplot(4, 5, 16)
+    # 創建彩色疊加圖
+    overlay = cv2.cvtColor(best_channel, cv2.COLOR_GRAY2RGB)
+    overlay[sobel_binary == 255] = [255, 0, 0]  # 紅色表示Sobel檢測
+    plt.imshow(overlay)
+    plt.title('Sobel結果疊加', fontsize=11)
+    plt.axis('off')
+    
+    plt.subplot(4, 5, 17)
+    overlay2 = cv2.cvtColor(best_channel, cv2.COLOR_GRAY2RGB)
+    overlay2[channel_binary == 255] = [0, 255, 0]  # 綠色表示通道檢測
+    plt.imshow(overlay2)
+    plt.title('通道結果疊加', fontsize=11)
+    plt.axis('off')
+    
+    plt.subplot(4, 5, 18)
+    # 兩種方法結果比較
+    comparison = cv2.cvtColor(best_channel, cv2.COLOR_GRAY2RGB)
+    comparison[sobel_binary == 255] = [255, 0, 0]  # 紅色：Sobel
+    comparison[channel_binary == 255] = [0, 255, 0]  # 綠色：通道
+    # 重疊區域顯示為黃色
+    overlap = (sobel_binary == 255) & (channel_binary == 255)
+    comparison[overlap] = [255, 255, 0]
+    plt.imshow(comparison)
+    plt.title('方法比較\n紅:Sobel 綠:通道 黃:重疊', fontsize=10)
+    plt.axis('off')
+    
+    plt.subplot(4, 5, 19)
+    # 通道詳細指標
+    channel_names = list(channel_results.keys())
+    contrasts = [channel_results[ch]['contrast'] for ch in channel_names]
+    edge_strengths = [channel_results[ch]['edge_strength'] for ch in channel_names]
+    
+    x = np.arange(len(channel_names))
+    width = 0.35
+    
+    plt.bar(x - width/2, contrasts, width, label='對比度', alpha=0.8)
+    plt.bar(x + width/2, edge_strengths, width, label='邊緣強度', alpha=0.8)
+    
+    plt.xlabel('通道')
+    plt.ylabel('數值')
+    plt.title('通道特性分析', fontsize=11)
+    plt.xticks(x, channel_names, rotation=45)
+    plt.legend()
+    
+    plt.subplot(4, 5, 20)
+    # 改進效果總結
+    improvements = [
+        "✓ 統一使用最佳通道",
+        "✓ 調整處理順序",
+        "✓ 使用k=1.5提高精確度", 
+        "✓ 增加性能評估指標",
+        "✓ 先增強後抑制策略"
+    ]
+    
+    for i, improvement in enumerate(improvements):
+        plt.text(0.05, 0.9 - i*0.15, improvement, fontsize=10, 
+                transform=plt.gca().transAxes, color='darkgreen')
+    
+    plt.title('改進項目', fontsize=11, fontweight='bold')
+    plt.axis('off')
+    
+    plt.tight_layout()
+    plt.show()
+
+def main():
+    """
+    改進版主程式
+    """
+    print("=== 改進版眼底血管檢測系統 ===")
+    print("主要改進:")
+    print("1. 統一使用最佳通道")
+    print("2. 調整處理順序（先增強再抑制）") 
+    print("3. 使用k=1.5提高檢測精確度")
+    print("4. 增加性能評估指標")
     print("=" * 50)
     
-    # 設定初始目錄
-    initial_dir = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Quadrant_division"
-    
     # 選擇影像檔案
-    print("請選擇眼底影像檔案...")
+    initial_dir = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Quadrant_division"
     image_path = select_image_file(initial_dir)
     
     if not image_path:
-        print("未選擇檔案，程式結束。")
+        print("未選擇檔案，程式結束")
         return
     
-    # 載入並調整影像大小
     try:
+        # 讀取並調整影像大小
         image = np.array(Image.open(image_path))
-        print(f"✅ 成功載入影像：{os.path.basename(image_path)}")
-        print(f"📏 原始影像大小：{image.shape[1]} x {image.shape[0]} 像素")
-        
-        # 調整影像大小
         image = resize_image(image, max_size=640)
-        print(f"📏 調整後影像大小：{image.shape[1]} x {image.shape[0]} 像素")
+        print(f"影像大小: {image.shape}")
         
-    except Exception as e:
-        print(f"❌ 載入影像失敗：{e}")
-        return
-    
-    print("\n🔄 處理步驟：")
-    print("-" * 30)
-    
-    # 步驟1：建立改進的圓形遮罩
-    print("步驟1：建立改進的圓形遮罩...")
-    mask = create_improved_circular_mask(image)
-    
-    # 步驟2：自適應通道選擇
-    print("步驟2：分析並選擇最佳通道...")
-    best_channel, best_channel_name, channel_analysis = analyze_all_channels(image, mask)
-    
-    print(f"📊 通道分析結果：")
-    for name, metrics in channel_analysis.items():
-        print(f"  {name:4}: 對比度={metrics['contrast']:.2f}, 邊緣強度={metrics['edge_strength']:.2f}, 動態範圍={metrics['dynamic_range']:.2f}, 總分={metrics['score']:.2f}")
-    print(f"🏆 選擇通道: {best_channel_name}")
-    
-    # 步驟3：Sobel血管檢測 (使用原始影像 + 遮罩 + 最佳通道)
-    print("步驟3：應用改良的Sobel血管檢測...")
-    sobel_vessels, sobel_raw, sobel_processed, sobel_eq, threshold_val = sobel_vessel_detection(image, mask, best_channel)
-    
-    # 步驟4：通道血管檢測 (使用原始影像 + 遮罩 + 最佳通道)
-    print("步驟4：應用基於最佳通道的血管檢測...")
-    channel_vessels, channel_enhanced, channel_threshold = channel_vessel_detection(image, mask, best_channel)
-    
-    # 步驟5：建立視覺化
-    print("步驟5：建立視覺化...")
-    
-    # 建立覆蓋層
-    sobel_overlay = np.zeros_like(image)
-    sobel_overlay[sobel_vessels > 0] = [255, 0, 0]  # Sobel血管用紅色
-    
-    channel_overlay = np.zeros_like(image)
-    channel_overlay[channel_vessels > 0] = [0, 255, 0]  # 通道血管用綠色
-    
-    # 與原始影像混合
-    sobel_result = (image * 0.7 + sobel_overlay * 0.3).astype(np.uint8)
-    channel_result = (image * 0.7 + channel_overlay * 0.3).astype(np.uint8)
-    
-    # 對結果應用遮罩
-    for i in range(3):
-        sobel_result[:, :, i] = sobel_result[:, :, i] * (mask / 255.0)
-        channel_result[:, :, i] = channel_result[:, :, i] * (mask / 255.0)
-    
-    # 顯示RGB通道分析
-    fig1, axes1 = plt.subplots(1, 4, figsize=(16, 4))
-    
-    if len(image.shape) == 3:
-        axes1[0].imshow(image[:,:,0], cmap='Reds')
-        axes1[0].set_title('紅色通道', fontsize=12)
-        axes1[0].axis('off')
+        # 建立眼球區域遮罩
+        print("\n建立眼球區域遮罩...")
+        mask = create_improved_circular_mask(image)
         
-        axes1[1].imshow(image[:,:,1], cmap='Greens') 
-        axes1[1].set_title('綠色通道', fontsize=12)
-        axes1[1].axis('off')
-        
-        axes1[2].imshow(image[:,:,2], cmap='Blues')
-        axes1[2].set_title('藍色通道', fontsize=12)
-        axes1[2].axis('off')
-        
-        axes1[3].imshow(best_channel, cmap='gray')
-        axes1[3].set_title(f'選定的{best_channel_name}通道', fontsize=12)
-        axes1[3].axis('off')
-    
-    plt.suptitle('RGB通道分析與最佳通道選擇', fontsize=14)
-    plt.tight_layout()
-    plt.show()
-    
-    # 顯示主要處理結果
-    fig2, axes2 = plt.subplots(3, 4, figsize=(20, 15))
-    
-    # 第一行：基礎處理步驟
-    axes2[0, 0].imshow(image)
-    axes2[0, 0].set_title('原始眼底影像', fontsize=11)
-    axes2[0, 0].axis('off')
-    
-    axes2[0, 1].imshow(mask, cmap='gray')
-    axes2[0, 1].set_title('改進的圓形遮罩', fontsize=11)
-    axes2[0, 1].axis('off')
-    
-    axes2[0, 2].imshow(sobel_raw, cmap='gray')
-    axes2[0, 2].set_title('Sobel邊緣檢測（原始）', fontsize=11)
-    axes2[0, 2].axis('off')
-    
-    axes2[0, 3].imshow(sobel_processed, cmap='gray')
-    axes2[0, 3].set_title('邊緣抑制後及統計移除', fontsize=11)
-    axes2[0, 3].axis('off')
-    
-    # 第二行：Sobel方法結果
-    axes2[1, 0].imshow(sobel_eq, cmap='gray')
-    axes2[1, 0].set_title('直方圖均衡化', fontsize=11)
-    axes2[1, 0].axis('off')
-    
-    axes2[1, 1].imshow(sobel_vessels, cmap='gray')
-    axes2[1, 1].set_title(f'Sobel血管遮罩（閾值：{threshold_val}）', fontsize=11)
-    axes2[1, 1].axis('off')
-    
-    axes2[1, 2].imshow(sobel_overlay)
-    axes2[1, 2].set_title('Sobel血管覆蓋（紅色）', fontsize=11)
-    axes2[1, 2].axis('off')
-    
-    axes2[1, 3].imshow(sobel_result)
-    axes2[1, 3].set_title('Sobel方法最終結果', fontsize=11)
-    axes2[1, 3].axis('off')
-    
-    # 第三行：最佳通道方法結果
-    axes2[2, 0].imshow(channel_enhanced, cmap='gray')
-    axes2[2, 0].set_title(f'{best_channel_name}通道增強', fontsize=11)
-    axes2[2, 0].axis('off')
-    
-    axes2[2, 1].imshow(channel_vessels, cmap='gray')
-    axes2[2, 1].set_title(f'{best_channel_name}通道血管（閾值：{channel_threshold:.1f}）', fontsize=11)
-    axes2[2, 1].axis('off')
-    
-    axes2[2, 2].imshow(channel_overlay)
-    axes2[2, 2].set_title(f'{best_channel_name}通道覆蓋（綠色）', fontsize=11)
-    axes2[2, 2].axis('off')
-    
-    axes2[2, 3].imshow(channel_result)
-    axes2[2, 3].set_title(f'{best_channel_name}通道方法最終結果', fontsize=11)
-    axes2[2, 3].axis('off')
-    
-    plt.tight_layout()
-    plt.suptitle(f'增強型眼底血管分割：Sobel vs {best_channel_name}通道方法', 
-                 fontsize=16, y=0.98)
-    plt.show()
-    
-    # 列印詳細分析結果
-    print("\n📊 處理摘要：")
-    print("-" * 30)
-    print(f"• 影像大小：{image.shape[1]} x {image.shape[0]} 像素")
-    print(f"• 選擇的最佳通道：{best_channel_name}")
-    print(f"• 遮罩覆蓋的眼球區域：{np.sum(mask > 0):,} 像素")
-    print(f"• Sobel統計閾值：{threshold_val}")
-    print(f"• Sobel檢測到的血管像素：{np.sum(sobel_vessels > 0):,}")
-    print(f"• {best_channel_name}通道閾值：{channel_threshold:.2f}")
-    print(f"• {best_channel_name}通道檢測到的血管像素：{np.sum(channel_vessels > 0):,}")
-    print(f"• Sobel血管覆蓋率：{(np.sum(sobel_vessels > 0) / np.sum(mask > 0)) * 100:.2f}%")
-    print(f"• {best_channel_name}通道血管覆蓋率：{(np.sum(channel_vessels > 0) / np.sum(mask > 0)) * 100:.2f}%")
-    
-    print("\n🎯 通道分析詳細結果：")
-    for name, metrics in channel_analysis.items():
-        print(f"  {name}通道 - 對比度: {metrics['contrast']:.2f}, 邊緣強度: {metrics['edge_strength']:.2f}, 動態範圍: {metrics['dynamic_range']:.2f}")
-    
-    return {
-        'original_image': image,
-        'mask': mask,
-        'best_channel': best_channel,
-        'best_channel_name': best_channel_name,
-        'channel_analysis': channel_analysis,
-        'sobel_vessels': sobel_vessels,
-        'channel_vessels': channel_vessels,
-        'sobel_result': sobel_result,
-        'channel_result': channel_result
-    }
+        # 分析通道並選擇最佳通道
+        print("\n分析RGB通道...")
+        best_channel, best_channel_name, channel_results = analyze_all_channels(image, mask)
 
-# 主程式執行
+        print(f"最佳通道: {best_channel_name}")
+        print("通道分析結果:")
+        for name, metrics in channel_results.items():
+            print(f"通道: {name}")
+            for metric_name, metric_value in metrics.items():
+                print(f"  {metric_name}: {metric_value}")
+        print("\n開始血管檢測...")
+        # Sobel方法血管檢測
+        sobel_binary, sobel_combined, sobel_processed, sobel_eq, sobel_threshold = sobel_vessel_detection(image, mask, best_channel)    
+        sobel_metrics = calculate_performance_metrics(sobel_binary, mask)
+        print("Sobel方法性能指標:")
+        for key, value in sobel_metrics.items():
+            print(f"{key}: {value}")
+        # 通道方法血管檢測
+        channel_binary, channel_enhanced, channel_edges, adaptive_threshold = channel_vessel_detection(image, mask, best_channel)
+        channel_metrics = calculate_performance_metrics(channel_binary, mask)
+        print("通道方法性能指標:")
+        for key, value in channel_metrics.items():
+            print(f"{key}: {value}")    
+        # 顯示結果
+        display_results(image, mask, best_channel, best_channel_name, channel_results, 
+                       (sobel_binary, sobel_combined, sobel_processed, sobel_eq, sobel_threshold), 
+                       (channel_binary, channel_enhanced, channel_edges, adaptive_threshold), 
+                       sobel_metrics, channel_metrics)
+    except Exception as e:
+        print(f"處理影像時發生錯誤: {e}")
+        return
+    finally:
+        print("程式結束，謝謝使用！")
+        cv2.destroyAllWindows()
+        plt.close('all')
+        Tk().withdraw()  # 確保關閉Tkinter主視窗
+        root = Tk()
+        root.destroy()  # 確保關閉Tkinter主視窗
+        root.mainloop()
+
 if __name__ == "__main__":
-    result = process_retinal_image()
+    main()

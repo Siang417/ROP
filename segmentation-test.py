@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from Get_Vein_CNNTrain import UNet
 
-# ---------------------------- Dataset ----------------------------
+# ---------------------------- 資料集 ----------------------------
 class VesselDatasetTest(Dataset):
     def __init__(self, img_dir, mask_dir=None, transform=None, save_names=False):
         self.img_dir    = img_dir
@@ -29,33 +29,55 @@ class VesselDatasetTest(Dataset):
         img_path = os.path.join(self.img_dir, name)
         image_pil = Image.open(img_path).convert("RGB")
 
-        # transform image → tensor [3, H, W]
+        # 轉換影像為 tensor [3, H, W]
         image = self.transform(image_pil) if self.transform else transforms.ToTensor()(image_pil)
 
-        # load or create mask tensor [1, H, W]
+        # 載入或建立遮罩 tensor [1, H, W]
         if self.mask_dir:
             mask_path = os.path.join(self.mask_dir, name)
             mask_pil  = Image.open(mask_path).convert("L")
             mask = self.transform(mask_pil) if self.transform else transforms.ToTensor()(mask_pil)
         else:
-            # dummy all-zeros mask
+            # 假的全零遮罩
             mask = torch.zeros(1, image.shape[1], image.shape[2], dtype=torch.float32)
 
         if self.save_names:
             return image, mask, name
         return image, mask
 
-# ---------------------------- Visualization ----------------------------
+import copy
+# ---------------------------- 視覺化 ----------------------------
+def overlay_vessel(image, mask_pred, save_path):
+    """
+    疊加預測血管區域於原始影像，血管區域以藍色標註
+    image: torch.Tensor [3,H,W]，值域[0,1]
+    mask_pred: torch.Tensor [2,H,W] 或 [1,H,W]
+    save_path: 儲存路徑
+    """
+    # 轉成 numpy 格式
+    img_np = (image.permute(1,2,0).cpu().numpy() * 255).astype(np.uint8) # H,W,3
+    img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+    # 取得預測遮罩
+    if mask_pred.ndim == 3 and mask_pred.shape[0] == 2:
+        vessel_mask = (mask_pred[1].cpu().numpy() > 0.5).astype(np.uint8)
+    else:
+        vessel_mask = (mask_pred.squeeze().cpu().numpy() > 0.5).astype(np.uint8)
+    # 建立白色遮罩 (BGR: [255,255,255])
+    white_mask = np.zeros_like(img_bgr)
+    white_mask[vessel_mask == 1] = [255, 255, 255]
+    # 疊加 (原圖 70% + 白色遮罩 30%)
+    overlay = cv2.addWeighted(img_bgr, 0.7, white_mask, 0.3, 0)
+    cv2.imwrite(save_path, overlay)
 def visualize_sample(image, mask_gt, mask_pred, save_path):
     image_np = image.permute(1, 2, 0).cpu().numpy()
     
-    # Handle mask_gt: either 1-channel (ground truth) or dummy zero
+    # 處理 mask_gt：可能是 1 通道（真實值）或假零遮罩
     if mask_gt is not None and mask_gt.ndim == 3 and mask_gt.shape[0] == 1:
         mask_gt_np = mask_gt[0].cpu().numpy()
     else:
         mask_gt_np = np.zeros((image_np.shape[0], image_np.shape[1]))
 
-    # Use only the vessel channel from prediction
+    # 只使用預測的血管通道
     if mask_pred.ndim == 3 and mask_pred.shape[0] == 2:
         mask_pred_np = (mask_pred[1].cpu().numpy() > 0.5).astype("float")
     else:
@@ -63,11 +85,11 @@ def visualize_sample(image, mask_gt, mask_pred, save_path):
 
     fig, axs = plt.subplots(1, 3, figsize=(12, 4))
     axs[0].imshow(image_np)
-    axs[0].set_title("Input Image")
+    axs[0].set_title("輸入影像")
     axs[1].imshow(mask_gt_np, cmap="gray")
-    axs[1].set_title("Ground Truth")
+    axs[1].set_title("真實遮罩")
     axs[2].imshow(mask_pred_np, cmap="gray")
-    axs[2].set_title("Predicted Mask")
+    axs[2].set_title("預測遮罩")
 
     for ax in axs:
         ax.axis("off")
@@ -78,32 +100,32 @@ def visualize_sample(image, mask_gt, mask_pred, save_path):
 
 def visualize_no_gt(image, mask_pred, save_path):
     """
-    image:     torch.Tensor [3,H,W] in RGB order, values [0,1]
-    mask_pred: torch.Tensor [2,H,W] or [1,H,W]
+    image:     torch.Tensor [3,H,W]，RGB順序，值域[0,1]
+    mask_pred: torch.Tensor [2,H,W] 或 [1,H,W]
     """
-    # 1) to H×W×C numpy uint8
+    # 1) 轉成 H×W×C numpy uint8
     img_np    = image.permute(1,2,0).cpu().numpy()        # RGB float32 [0,1]
-    img_uint8 = (img_np * 255).astype(np.uint8)           # still RGB
+    img_uint8 = (img_np * 255).astype(np.uint8)           # 仍為RGB
 
-    # 2) convert to BGR for OpenCV
+    # 2) 轉成OpenCV的BGR格式
     img_bgr = cv2.cvtColor(img_uint8, cv2.COLOR_RGB2BGR)
 
-    # 3) extract binary mask (0/255)
+    # 3) 取出二值遮罩 (0/255)
     if mask_pred.ndim == 3 and mask_pred.shape[0] == 2:
         m = (mask_pred[1].cpu().numpy() > 0.5).astype(np.uint8) * 255
     else:
         m = (mask_pred.squeeze().cpu().numpy() > 0.5).astype(np.uint8) * 255
 
-    # 4) make mask 3-channel BGR
+    # 4) 遮罩轉成3通道BGR
     m_color = cv2.cvtColor(m, cv2.COLOR_GRAY2BGR)
 
-    # 5) stack and save
+    # 5) 並排儲存
     comp = np.hstack([img_bgr, m_color])
     cv2.imwrite(save_path, comp)
 
-# ---------------------------- Dice and Accuracy ----------------------------
+# ---------------------------- Dice係數與準確率 ----------------------------
 def dice_coeff(pred, target, epsilon=1e-6):
-    # Handle shape: [B, C, H, W] → [B, H, W]
+    # 處理形狀: [B, C, H, W] → [B, H, W]
     if pred.ndim == 4:
         pred = pred[:, 0]
     if target.ndim == 4:
@@ -119,28 +141,33 @@ def pixel_acc(pred, target):
     correct = (pred == target).float()
     return correct.mean()
 
-# ---------------------------- Test Runner ----------------------------
+# ---------------------------- 測試執行器 ----------------------------
 def run_test(use_ground_truth=False):
     TEST_IMG_DIR  = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\test"
     TEST_MASK_DIR = r"C:\Users\Zz423\Downloads\SEGMENTATION\FIVES\test\Ground Truth" if use_ground_truth else None
     CKPT_PATH     = r"D:\ROP\best_vessel_cnn.pth"
     SAVE_PRED_DIR = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Predictions2"
     SAVE_VIS_DIR  = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Visualizations2"
+    SAVE_OVERLAY_DIR = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Overlay"
 
     BATCH_SIZE = 2
     DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
 
+    # 建立儲存資料夾
     os.makedirs(SAVE_PRED_DIR, exist_ok=True)
     os.makedirs(SAVE_VIS_DIR, exist_ok=True)
+    os.makedirs(SAVE_OVERLAY_DIR, exist_ok=True)
 
     transform = transforms.Compose([
         transforms.Resize((512, 512)),
         transforms.ToTensor()
     ])
 
+    # 建立測試資料集與資料載入器
     test_ds = VesselDatasetTest(TEST_IMG_DIR, TEST_MASK_DIR, transform, save_names=True)
     test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False)
 
+    # 載入模型
     model = UNet()
     checkpoint = torch.load(CKPT_PATH, map_location=DEVICE)
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -162,11 +189,14 @@ def run_test(use_ground_truth=False):
                 Image.fromarray(pred_mask).save(os.path.join(SAVE_PRED_DIR, name))
 
                 vis_path = os.path.join(SAVE_VIS_DIR, name)
+                overlay_path = os.path.join(SAVE_OVERLAY_DIR, name)
+                # 疊加預測血管區域於原始影像
+                overlay_vessel(imgs[i], preds[i], overlay_path)
                 if TEST_MASK_DIR is None:
-                    # NO ground-truth → 2-column view
+                    # 沒有真實遮罩 → 2欄顯示
                     visualize_no_gt(imgs[i], preds[i], vis_path)
                 else:
-                    # HAS ground-truth → 3-column view
+                    # 有真實遮罩 → 3欄顯示
                     visualize_sample(imgs[i], masks[i], preds[i], vis_path)
 
             if masks is not None:
@@ -175,12 +205,12 @@ def run_test(use_ground_truth=False):
                 n_batches  += 1
 
     if n_batches > 0:
-        print(f"\n=== Test Metrics ===")
-        print(f"Dice coefficient : {dice_total / n_batches:.4f}")
-        print(f"Pixel accuracy   : {acc_total  / n_batches:.4f}")
+        print(f"\n=== 測試指標 ===")
+        print(f"Dice係數 : {dice_total / n_batches:.4f}")
+        print(f"像素準確率   : {acc_total  / n_batches:.4f}")
     else:
-        print("Predictions saved. No ground truth masks provided.")
+        print("已儲存預測結果，未提供真實遮罩。")
 
-# ---------------------------- Run ----------------------------
+# ---------------------------- 執行 ----------------------------
 if __name__ == "__main__":
     run_test()

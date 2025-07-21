@@ -121,11 +121,11 @@ def pixel_acc(pred, target):
 
 # ---------------------------- Test Runner ----------------------------
 def run_test(use_ground_truth=False):
-    TEST_IMG_DIR  = r"C:\Users\Redina\Desktop\test-private-odm"
-    TEST_MASK_DIR = r"C:\Users\Redina\Downloads\SEGMENTATION\FIVES\test\Ground Truth" if use_ground_truth else None
-    CKPT_PATH     = r"C:\Users\Redina\ROP\best_vessel_cnn.pth"
-    SAVE_PRED_DIR = r"C:\Users\Redina\Desktop\test-private-odm\Predictions2"
-    SAVE_VIS_DIR  = r"C:\Users\Redina\Desktop\test-private-odm\Visualizations2"
+    TEST_IMG_DIR  = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\test"
+    TEST_MASK_DIR = r"C:\Users\Zz423\Downloads\SEGMENTATION\FIVES\test\Ground Truth" if use_ground_truth else None
+    CKPT_PATH     = r"D:\ROP\best_vessel_cnn.pth"
+    SAVE_PRED_DIR = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Predictions2"
+    SAVE_VIS_DIR  = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Visualizations2"
 
     BATCH_SIZE = 2
     DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"

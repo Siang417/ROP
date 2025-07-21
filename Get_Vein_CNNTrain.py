@@ -17,7 +17,7 @@ import gc
 
 # 配置類別
 class Config:
-    # Data path
+    # 資料路徑
     DATA_ROOT = r"C:\Users\Redina\Downloads\SEGMENTATION"
     DATASETS = ["CHASE_DB1", "DRIVE", "FIVES", "HRF", "HVDROPDB-NEO", "HVDROPDB-RETCAM", "ROP"]
     
@@ -32,15 +32,15 @@ class Config:
     
     NUM_CLASSES = 2
     
-    # CHASE_DB1 mask options
-    USE_BOTH_CHASE_MASKS = True  # True: use both masks, False: use only 1stHO
+    # CHASE_DB1 遮罩選項
+    USE_BOTH_CHASE_MASKS = True  # True: 使用兩個遮罩, False: 只用 1stHO
     
     MODEL_SAVE_PATH = "models/"
     LOG_PATH = "logs/"
     
     @classmethod
     def to_dict(cls):
-        """Convert configuration to a serializable dictionary"""
+        """將配置轉換為可序列化字典"""
         return {
             'DATA_ROOT': cls.DATA_ROOT,
             'DATASETS': cls.DATASETS,
@@ -69,9 +69,9 @@ class VesselDataset(Dataset):
         return len(self.image_paths)
     
     def load_image_robust(self, image_path):
-        """Robust image loading function"""
+        """健壯的影像載入函數"""
         try:
-            # First try reading with OpenCV
+            # 首先嘗試用 OpenCV 讀取
             image = cv2.imread(image_path)
             if image is not None:
                 return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -79,61 +79,61 @@ class VesselDataset(Dataset):
             pass
         
         try:
-            # If OpenCV fails, use PIL
+            # 如果 OpenCV 失敗則用 PIL
             image = Image.open(image_path).convert('RGB')
             return np.array(image)
         except:
             pass
         
-        raise ValueError(f"Failed to load image: {image_path}")
+        raise ValueError(f"無法載入影像: {image_path}")
     
     def load_mask_robust(self, mask_path):
-        """Robust mask loading function, with special handling for GIF format"""
+        """健壯的遮罩載入函數，特別處理 GIF 格式"""
         try:
-            # Check file extension
+            # 檢查檔案副檔名
             ext = os.path.splitext(mask_path)[1].lower()
             
             if ext == '.gif':
-                # USe PIL to read GIF files
+                # 用 PIL 讀取 GIF 檔
                 with Image.open(mask_path) as img:
-                    # Convert to grayscale
+                    # 轉成灰階
                     mask = img.convert('L')
                     return np.array(mask)
             else:
-                # Use OpenCV to read other formats
+                # 用 OpenCV 讀取其他格式
                 mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
                 if mask is not None:
                     return mask
         except Exception as e:
-            print(f"Failed to load mask (OpenCV): {mask_path}, Error: {e}")
+            print(f"無法用 OpenCV 載入遮罩: {mask_path}, 錯誤: {e}")
         
         try:
-            # Backup option：use PIL
+            # 備用方案：用 PIL
             with Image.open(mask_path) as img:
                 mask = img.convert('L')
                 return np.array(mask)
         except Exception as e:
-            print(f"Failed to load mask (PIL): {mask_path}, Error: {e}")
+            print(f"無法用 PIL 載入遮罩: {mask_path}, 錯誤: {e}")
         
-        raise ValueError(f"Failed to load mask: {mask_path}")
+        raise ValueError(f"無法載入遮罩: {mask_path}")
     
     def __getitem__(self, idx):
         try:
-            # Load original image
+            # 載入原始影像
             image = self.load_image_robust(self.image_paths[idx])
             image = cv2.resize(image, self.target_size)
             
-            # Load mask
+            # 載入遮罩
             mask = self.load_mask_robust(self.mask_paths[idx])
             mask = cv2.resize(mask, self.target_size)
             
-            # Binarize mask (white = vessel = 1, black = background = 0)
+            # 遮罩二值化 (白=血管=1, 黑=背景=0)
             mask = (mask > 127).astype(np.uint8)
             
-            # Normalize image to [0, 1]
+            # 影像正規化到 [0, 1]
             image = image.astype(np.float32) / 255.0
             
-            # Convert to PyTorch tensors
+            # 轉成 PyTorch tensor
             image = torch.FloatTensor(image).permute(2, 0, 1)  # (H, W, C) -> (C, H, W)
             mask = torch.LongTensor(mask)
             
@@ -143,7 +143,7 @@ class VesselDataset(Dataset):
             print(f"Error occurred while loading data: {e}")
             print(f"Image path: {self.image_paths[idx]}")
             print(f"Mask path: {self.mask_paths[idx]}")
-            # Return zero tensors to avoid crash
+            # 回傳零 tensor 以避免程式崩潰
             image = torch.zeros(3, self.target_size[1], self.target_size[0])
             mask = torch.zeros(self.target_size[1], self.target_size[0], dtype=torch.long)
             return image, mask
@@ -190,7 +190,7 @@ class VesselCNN(nn.Module):
 # 智能檔案配對函數
 def find_matching_mask(image_path, dataset_name, mask_dir):
     """
-    Find corresponding mask file based on dataset-specific filename rules.
+    根據資料集的檔名規則尋找對應的遮罩檔案。
     """
     image_name = os.path.basename(image_path)
     image_stem = os.path.splitext(image_name)[0]
@@ -245,7 +245,7 @@ def find_matching_mask(image_path, dataset_name, mask_dir):
 
 # File format checker
 def check_file_formats(image_paths, mask_paths):
-    """Check and report file format distribution"""
+    """檢查並回報檔案格式分布"""
     print("📊 File Format Analysis:")
     
     # Count image formats
@@ -308,22 +308,22 @@ def load_dataset_paths(data_root, datasets):
             
             if matching_masks:
                 if dataset == "CHASE_DB1" and Config.USE_BOTH_CHASE_MASKS:
-                    # Use all found masks
+                    # 使用所有找到的遮罩
                     for mask_path in matching_masks:
                         all_image_paths.append(img_path)
                         all_mask_paths.append(mask_path)
                         dataset_pairs += 1
                 else:
-                    # Use only the first found mask (e.g., 1stHO for CHASE_DB1)
+                    # 只用第一個找到的遮罩 (例如 CHASE_DB1 的 1stHO)
                     all_image_paths.append(img_path)
                     all_mask_paths.append(matching_masks[0])
                     dataset_pairs += 1
             else:
-                print(f"  ⚠️ No matching mask found for {os.path.basename(img_path)}")
+                print(f"  ⚠️ 找不到對應遮罩: {os.path.basename(img_path)}")
         
-        print(f"  ✅ Successfully matched: {dataset_pairs} pairs")
+        print(f"  ✅ 成功配對: {dataset_pairs} 組")
     
-    print(f"Total matched image-mask pairs: {len(all_image_paths)}")
+    print(f"總共配對影像-遮罩組數: {len(all_image_paths)}")
     
     # 檢查檔案格式
     check_file_formats(all_image_paths, all_mask_paths)
@@ -332,10 +332,10 @@ def load_dataset_paths(data_root, datasets):
 
 # Dataset splitting function
 def split_dataset(image_paths, mask_paths, train_ratio=0.8, val_ratio=0.1, test_ratio=0.1):
-    # Ensure the sum of ratios equals 1
+    # 確保比例總和為 1
     assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6
     
-    # Create paired indices and shuffle
+    # 建立配對索引並打亂
     indices = list(range(len(image_paths)))
     random.shuffle(indices)
     
@@ -363,11 +363,11 @@ def calculate_metrics(pred, target):
     pred = pred.cpu().numpy().flatten()
     target = target.cpu().numpy().flatten()
     
-    # Confusion matrix
+    # 混淆矩陣
     cm = confusion_matrix(target, pred, labels=[0, 1])
     tn, fp, fn, tp = cm.ravel()
     
-    # Compute metrics
+    # 計算指標
     iou = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else 0
     dice = 2 * tp / (2 * tp + fp + fn) if (2 * tp + fp + fn) > 0 else 0
     sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
@@ -384,7 +384,7 @@ def calculate_metrics(pred, target):
 
 # Memory cleaning function
 def clear_memory():
-    """Clear GPU memory"""
+    """清理 GPU 記憶體"""
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     gc.collect()
@@ -456,16 +456,16 @@ class UNet(nn.Module):
 
 # Training function
 def train_model():
-    # Set random seed
+    # 設定隨機種子
     torch.manual_seed(42)
     random.seed(42)
     np.random.seed(42)
     
-    # Create save directories
+    # 建立儲存資料夾
     os.makedirs(Config.MODEL_SAVE_PATH, exist_ok=True)
     os.makedirs(Config.LOG_PATH, exist_ok=True)
     
-    # Load dataset paths
+    # 載入資料集路徑
     print("Loading dataset paths...")
     image_paths, mask_paths = load_dataset_paths(Config.DATA_ROOT, Config.DATASETS)
     
@@ -473,7 +473,7 @@ def train_model():
         print("❌ No valid image-mask pairs found!")
         return None, None
     
-    # Split dataset
+    # 切分資料集
     print("Splitting dataset...")
     (train_images, train_masks), (val_images, val_masks), (test_images, test_masks) = split_dataset(
         image_paths, mask_paths, Config.TRAIN_RATIO, Config.VAL_RATIO, Config.TEST_RATIO
@@ -483,17 +483,17 @@ def train_model():
     print(f"Validation set: {len(val_images)} images")
     print(f"Test set: {len(test_images)} images")
     
-    # Create dataloaders
+    # 建立資料載入器
     train_dataset = VesselDataset(train_images, train_masks, target_size=Config.IMAGE_SIZE)
     val_dataset = VesselDataset(val_images, val_masks, target_size=Config.IMAGE_SIZE)
     
-    # Use fewer workers to save memory
+    # 使用較少 workers 以節省記憶體
     train_loader = DataLoader(train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True, 
                              num_workers=2, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False, 
                            num_workers=2, pin_memory=True)
     
-    # Initialize model
+    # 初始化模型
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"使用設備: {device}")
     
@@ -503,28 +503,28 @@ def train_model():
     
     model = UNet(in_channels=3, out_channels=Config.NUM_CLASSES).to(device)
     
-    # Loss function (handle class imbalance)
-    # Vesel pixels are fewer, give higher weight
+    # 損失函數 (處理類別不平衡)
+    # 血管像素較少，給予較高權重
     class_weights = torch.FloatTensor([0.1, 0.9]).to(device)  # [背景, 血管]
     criterion = nn.CrossEntropyLoss(weight=class_weights)
     
-    # Optimizer
+    # 優化器
     optimizer = optim.Adam(model.parameters(), lr=Config.LEARNING_RATE)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', patience=10, factor=0.5)
     
-    # Training log
+    # 訓練紀錄
     train_losses = []
     val_metrics = []
     best_val_iou = 0.0
     
-    print("Starting training...")
+    print("開始訓練...")
     print("=" * 60)
     
     for epoch in range(Config.EPOCHS):
-        # Clear memory
+        # 清理記憶體
         clear_memory()
         
-        # Training phase
+        # 訓練階段
         model.train()
         train_loss = 0.0
         
@@ -545,7 +545,7 @@ def train_model():
         avg_train_loss = train_loss / len(train_loader)
         train_losses.append(avg_train_loss)
         
-        # Validation phase
+        # 驗證階段
         model.eval()
         val_iou_total = 0.0
         val_dice_total = 0.0
@@ -566,7 +566,7 @@ def train_model():
                     val_dice_total += metrics['Dice']
                     val_acc_total += metrics['Accuracy']
         
-        # Average metrics
+        # 平均指標
         num_val_samples = len(val_loader.dataset)
         avg_val_iou = val_iou_total / num_val_samples
         avg_val_dice = val_dice_total / num_val_samples
@@ -578,7 +578,7 @@ def train_model():
             'Accuracy': avg_val_acc
         })
         
-        # Adjust learning rate
+        # 調整學習率
         scheduler.step(avg_val_iou)
         
         print(f'Epoch {epoch+1}/{Config.EPOCHS}:')
@@ -593,7 +593,7 @@ def train_model():
         
         print('-' * 60)
         
-        # Save the best model - fix pickle error
+        # 儲存最佳模型 - 修正 pickle 錯誤
         if avg_val_iou > best_val_iou:
             best_val_iou = avg_val_iou
             try:
@@ -615,7 +615,7 @@ def train_model():
                 }, os.path.join(Config.MODEL_SAVE_PATH, 'best_vessel_cnn_simple.pth'))
                 print('✅ Simplified model saved!')
     
-    # Save training log – also fix pickle issue
+    # 儲存訓練紀錄 – 也修正 pickle 問題
     training_log = {
         'train_losses': train_losses,
         'val_metrics': val_metrics,
@@ -633,7 +633,7 @@ def train_model():
     
     print(f"🎉 Training completed! Best validation IoU: {best_val_iou:.4f}")
     
-    # Evaluate on test set
+    # 在測試集上評估
     print("Evaluating on test set...")
     test_dataset = VesselDataset(test_images, test_masks, target_size=Config.IMAGE_SIZE)
     test_loader = DataLoader(test_dataset, batch_size=Config.BATCH_SIZE, shuffle=False, 
@@ -652,7 +652,7 @@ def train_model():
                 metrics = calculate_metrics(predicted[i], masks[i])
                 test_metrics.append(metrics)
     
-    # Average test metrics
+    # 平均測試指標
     avg_test_metrics = {}
     for key in test_metrics[0].keys():
         avg_test_metrics[key] = np.mean([m[key] for m in test_metrics])

@@ -146,17 +146,24 @@ def run_test(use_ground_truth=False):
     TEST_IMG_DIR  = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\test"
     TEST_MASK_DIR = r"C:\Users\Zz423\Downloads\SEGMENTATION\FIVES\test\Ground Truth" if use_ground_truth else None
     CKPT_PATH     = r"D:\ROP\best_vessel_cnn.pth"
-    SAVE_PRED_DIR = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Predictions2"
-    SAVE_VIS_DIR  = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Visualizations2"
-    SAVE_OVERLAY_DIR = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Overlay"
+    SAVE_PRED_DIR_BASE = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Predictions2"
+    SAVE_VIS_DIR_BASE  = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Visualizations2"
+    SAVE_OVERLAY_DIR_BASE = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Overlay"
+
+    # 取得今天的時間戳 (YYYYMMDD)
+    from datetime import datetime
+    today_str = datetime.now().strftime('%Y%m%d')
+    SAVE_PRED_DIR = os.path.join(SAVE_PRED_DIR_BASE, today_str)
+    SAVE_VIS_DIR = os.path.join(SAVE_VIS_DIR_BASE, today_str)
+    SAVE_OVERLAY_DIR = os.path.join(SAVE_OVERLAY_DIR_BASE, today_str)
 
     BATCH_SIZE = 2
     DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # 建立儲存資料夾
-    os.makedirs(SAVE_PRED_DIR, exist_ok=True)
-    os.makedirs(SAVE_VIS_DIR, exist_ok=True)
-    os.makedirs(SAVE_OVERLAY_DIR, exist_ok=True)
+    # 建立或確認時間戳資料夾
+    for d in [SAVE_PRED_DIR, SAVE_VIS_DIR, SAVE_OVERLAY_DIR]:
+        if not os.path.exists(d):
+            os.makedirs(d, exist_ok=True)
 
     transform = transforms.Compose([
         transforms.Resize((512, 512)),

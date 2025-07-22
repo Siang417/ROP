@@ -125,6 +125,7 @@ def process_zone_detection(image_path):
         result_status = "No_Zones"
     
     # 現在根據檢測得到的OD中心點對原圖進行象限切割
+    print(original_image.shape) # 調試輸出原圖大小
     quadrants = Quadrant_division(original_image.copy(), od_center)
     
     # 調試資訊

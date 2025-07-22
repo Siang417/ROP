@@ -136,7 +136,6 @@ def process_image_with_unet(image, model):
     return pred, image_resized
 
 def draw_zone1(image, od_center, fovea_center=None, od_radius=None):
-    """繪製 ZONE1 區域"""
     image_with_zone = image.copy()
     
     # 繪製視盤中心點（綠色）
@@ -151,8 +150,8 @@ def draw_zone1(image, od_center, fovea_center=None, od_radius=None):
         # 計算視盤中心點和黃斑點之間的歐氏距離
         distance = calculate_distance(od_center, fovea_center)
         
-        # 使用這個距離作為 ZONE1 的半徑
-        zone1_radius = distance
+        # ZONE1 的半徑是兩點距離的2倍
+        zone1_radius = distance * 2
         
         # 繪製 ZONE1 範圍（綠色圓）
         cv2.circle(image_with_zone, 
@@ -178,6 +177,7 @@ def draw_zone1(image, od_center, fovea_center=None, od_radius=None):
 def calculate_distance(point1, point2):
     """計算兩點間的歐氏距離"""
     return math.sqrt((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2)
+
 
 def main():
     # 載入模型

@@ -135,6 +135,50 @@ def process_image_with_unet(image, model):
     
     return pred, image_resized
 
+def draw_zone1(image, od_center, fovea_center=None, od_radius=None):
+    """繪製 ZONE1 區域"""
+    image_with_zone = image.copy()
+    
+    # 繪製視盤中心點（綠色）
+    cv2.circle(image_with_zone, 
+              (int(od_center[0]), int(od_center[1])), 
+              5, (0, 255, 0), -1)
+    cv2.putText(image_with_zone, 'Optic Disc (1)', 
+                (int(od_center[0] - 60), int(od_center[1] - 10)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+    if fovea_center is not None:
+        # 計算視盤中心點和黃斑點之間的歐氏距離
+        distance = calculate_distance(od_center, fovea_center)
+        
+        # 使用這個距離作為 ZONE1 的半徑
+        zone1_radius = distance
+        
+        # 繪製 ZONE1 範圍（綠色圓）
+        cv2.circle(image_with_zone, 
+                  (int(od_center[0]), int(od_center[1])), 
+                  int(zone1_radius), (0, 255, 0), 2)
+        
+        # 繪製黃斑點（紅色）
+        cv2.circle(image_with_zone, 
+                  (int(fovea_center[0]), int(fovea_center[1])), 
+                  5, (0, 0, 255), -1)
+        cv2.putText(image_with_zone, 'Fovea (0)', 
+                    (int(fovea_center[0] - 50), int(fovea_center[1] - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        
+        # 繪製視盤中心到黃斑點的連接線（紅色）
+        cv2.line(image_with_zone, 
+                (int(od_center[0]), int(od_center[1])),
+                (int(fovea_center[0]), int(fovea_center[1])), 
+                (0, 0, 255), 2)
+
+    return image_with_zone
+
+def calculate_distance(point1, point2):
+    """計算兩點間的歐氏距離"""
+    return math.sqrt((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2)
+
 def main():
     # 載入模型
     yolo_model = YOLO(r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\ROP-zones\runs\segment\ROP6\weights\best.pt")
@@ -161,18 +205,26 @@ def main():
     # 執行YOLOv8預測
     results = yolo_model(original_image)
     
-    # 處理YOLO結果，獲取視盤位置
+    # 處理YOLO結果，獲取視盤和黃斑點位置
     od_center = None
+    fovea_center = None
+    od_radius = None
+    
     for r in results:
         for i, cls in enumerate(r.boxes.cls):
-            if cls == 0:  # 假設0是視盤類別
-                box = r.boxes.xyxy[i]
+            box = r.boxes.xyxy[i].cpu().numpy()  # 確保轉換為 numpy array
+            if int(cls) == 1:  # 視盤類別
                 od_center = calculate_center(box[0], box[1], box[2], box[3])
-                break
+                od_radius = (box[2] - box[0]) / 2  # 計算視盤半徑
+            elif int(cls) == 0:  # 黃斑點類別
+                fovea_center = calculate_center(box[0], box[1], box[2], box[3])
     
     if od_center is None:
         print("未檢測到視盤")
         return
+
+    # 在原始圖片上繪製 ZONE1
+    original_with_zone1 = draw_zone1(original_image, od_center, fovea_center, od_radius)
 
     # 使用U-Net進行血管分割
     vessel_mask, resized_image = process_image_with_unet(original_image, unet_model)
@@ -203,9 +255,9 @@ def main():
     
     # 顯示原始圖片與ZONE1標記
     plt.subplot(2, 3, 1)
-    plt.imshow(cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB))
+    plt.imshow(cv2.cvtColor(original_with_zone1, cv2.COLOR_BGR2RGB))
     plt.title('Original Image with ZONE1')
-    
+
     # 顯示血管分割結果
     plt.subplot(2, 3, 2)
     plt.imshow(vessel_overlay)

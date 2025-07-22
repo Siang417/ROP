@@ -207,9 +207,8 @@ def pixel_acc(pred, target):
     return correct.mean()
 
 # ---------------------------- 測試執行器 ----------------------------
-def run_test(use_ground_truth=False):
+def run_test():
     TEST_IMG_DIR  = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Quadrant_division\NoPlus1-OD"
-    TEST_MASK_DIR = r"C:\Users\Zz423\Downloads\SEGMENTATION\FIVES\test\Ground Truth" if use_ground_truth else None
     CKPT_PATH     = r"D:\ROP\best_vessel_cnn.pth"
     SAVE_PRED_DIR_BASE = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Predictions2"
     SAVE_VIS_DIR_BASE  = r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\Visualizations2"
@@ -236,7 +235,7 @@ def run_test(use_ground_truth=False):
     ])
 
     # 建立測試資料集與資料載入器
-    test_ds = VesselDatasetTest(TEST_IMG_DIR, TEST_MASK_DIR, transform, save_names=True)
+    test_ds = VesselDatasetTest(TEST_IMG_DIR, None, transform, save_names=True)
     test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False)
 
     # 載入模型
@@ -264,12 +263,8 @@ def run_test(use_ground_truth=False):
                 overlay_path = os.path.join(SAVE_OVERLAY_DIR, name)
                 # 疊加預測血管區域於原始影像
                 overlay_vessel(imgs[i], preds[i], overlay_path)
-                if TEST_MASK_DIR is None:
-                    # 沒有真實遮罩 → 2欄顯示
-                    visualize_no_gt(imgs[i], preds[i], vis_path)
-                else:
-                    # 有真實遮罩 → 3欄顯示
-                    visualize_sample(imgs[i], masks[i], preds[i], vis_path)
+                # 只顯示預測結果（無真實遮罩）
+                visualize_no_gt(imgs[i], preds[i], vis_path)
 
             if masks is not None:
                 dice_total += dice_coeff(preds[:, 0], masks[:, 0]).item()

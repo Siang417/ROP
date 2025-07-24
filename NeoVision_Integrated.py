@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 from PIL import Image
 import matplotlib.pyplot as plt
+import time
 
 # ---------------------------- U-Net模型定義 ----------------------------
 class DoubleConv(nn.Module):
@@ -120,6 +121,8 @@ def save_quadrant_images(quadrants, image_path):
 
 def process_image_with_unet(image, model):
     """使用U-Net處理圖片"""
+    start_time = time.time()  # 開始計時
+
     # 調整圖片大小為512x512
     image_resized = cv2.resize(image, (512, 512))
     
@@ -132,6 +135,10 @@ def process_image_with_unet(image, model):
         output = model(image_tensor)
         pred = torch.argmax(output, dim=1)
         pred = pred.squeeze().numpy()
+
+    end_time = time.time()  # 結束計時
+    unet_time = end_time - start_time
+    print(f"U-Net 推理時間: {unet_time:.3f} 秒")
     
     return pred, image_resized
 
@@ -180,14 +187,7 @@ def calculate_distance(point1, point2):
 
 
 def main():
-    # 載入模型
-    yolo_model = YOLO(r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\ROP-zones\runs\segment\ROP6\weights\best.pt")
-    unet_model = UNet()
-    checkpoint = torch.load(r"D:\ROP\best_vessel_cnn.pth")
-    unet_model.load_state_dict(checkpoint['model_state_dict'])  # 只載入模型權重
-    unet_model.eval()
-
-    # 創建檔案選擇對話框
+    # 1. 先讓使用者選擇檔案（不計入時間）
     root = tk.Tk()
     root.withdraw()
     image_path = filedialog.askopenfilename(title="選擇眼底影像")
@@ -196,49 +196,55 @@ def main():
         print("未選擇檔案")
         return
 
-    # 讀取原始圖片
+    # 2. 開始計算核心處理時間
+    core_start_time = time.time()
+    
+    # 2.1 圖片讀取時間
+    img_read_start = time.time()
     original_image = cv2.imread(image_path)
-    if original_image is None:
-        print("無法讀取圖片")
-        return
+    img_read_time = time.time() - img_read_start
+    print(f"\n圖片讀取時間: {img_read_time:.3f} 秒")
 
-    # 執行YOLOv8預測
+    # 2.2 YOLO推理（已有內建時間輸出）
+    yolo_model = YOLO(r"C:\Users\Zz423\Desktop\研究所\UCL\旺宏\Redina 資料\ROP-zones\runs\segment\ROP6\weights\best.pt")
     results = yolo_model(original_image)
     
-    # 處理YOLO結果，獲取視盤和黃斑點位置
+    # 2.3 YOLO結果處理時間
+    post_yolo_start = time.time()
     od_center = None
     fovea_center = None
     od_radius = None
     
     for r in results:
         for i, cls in enumerate(r.boxes.cls):
-            box = r.boxes.xyxy[i].cpu().numpy()  # 確保轉換為 numpy array
-            if int(cls) == 1:  # 視盤類別
+            box = r.boxes.xyxy[i].cpu().numpy()
+            if int(cls) == 1:
                 od_center = calculate_center(box[0], box[1], box[2], box[3])
-                od_radius = (box[2] - box[0]) / 2  # 計算視盤半徑
-            elif int(cls) == 0:  # 黃斑點類別
+                od_radius = (box[2] - box[0]) / 2
+            elif int(cls) == 0:
                 fovea_center = calculate_center(box[0], box[1], box[2], box[3])
     
-    if od_center is None:
-        print("未檢測到視盤")
-        return
-
-    # 在原始圖片上繪製 ZONE1
+    # 繪製ZONE1
     original_with_zone1 = draw_zone1(original_image, od_center, fovea_center, od_radius)
+    post_yolo_time = time.time() - post_yolo_start
+    print(f"繪製ZONE1區域所需時間: {post_yolo_time:.3f} 秒")
 
-    # 使用U-Net進行血管分割
+    # 2.4 U-Net推理（process_image_with_unet函數中已有時間計算）
+    unet_model = UNet()
+    checkpoint = torch.load(r"D:\ROP\best_vessel_cnn.pth")
+    unet_model.load_state_dict(checkpoint['model_state_dict'])
+    unet_model.eval()
     vessel_mask, resized_image = process_image_with_unet(original_image, unet_model)
     
-    # 將遮罩轉換為彩色圖像進行疊加
+    # 2.5 U-Net結果後處理時間
+    post_unet_start = time.time()
     vessel_overlay = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
-    vessel_overlay[vessel_mask == 1] = [255, 0, 0]  # 將血管區域標記為紅色
+    vessel_overlay[vessel_mask == 1] = [255, 0, 0]
 
-    # 計算512x512圖片中視盤中心點的相對位置
     scale_x = 512 / original_image.shape[1]
     scale_y = 512 / original_image.shape[0]
     od_center_512 = (int(od_center[0] * scale_x), int(od_center[1] * scale_y))
 
-    # 根據視盤中心點切割象限
     height, width = vessel_overlay.shape[:2]
     quadrants = {
         'Q1': vessel_overlay[0:od_center_512[1], od_center_512[0]:width],
@@ -246,24 +252,28 @@ def main():
         'Q3': vessel_overlay[od_center_512[1]:height, 0:od_center_512[0]],
         'Q4': vessel_overlay[od_center_512[1]:height, od_center_512[0]:width]
     }
+    post_unet_time = time.time() - post_unet_start
+    print(f"U-Net後處理(進行疊加及象限分割)時間: {post_unet_time:.3f} 秒")
 
-    # 保存結果
+    # 計算核心處理總時間
+    core_total_time = time.time() - core_start_time
+    print(f"\n核心處理總時間: {core_total_time:.3f} 秒")
+    
+    # 3. 結果保存和顯示（不計入時間）
     save_quadrant_images(quadrants, image_path)
+    display_results(original_with_zone1, vessel_overlay, quadrants)
 
-    # 顯示結果
+def display_results(original_with_zone1, vessel_overlay, quadrants):
     plt.figure(figsize=(15, 10))
     
-    # 顯示原始圖片與ZONE1標記
     plt.subplot(2, 3, 1)
     plt.imshow(cv2.cvtColor(original_with_zone1, cv2.COLOR_BGR2RGB))
     plt.title('Original Image with ZONE1')
 
-    # 顯示血管分割結果
     plt.subplot(2, 3, 2)
     plt.imshow(vessel_overlay)
     plt.title('Vessel Segmentation')
     
-    # 顯示四個象限
     plt.subplot(2, 3, 3)
     plt.imshow(quadrants['Q1'])
     plt.title('Quadrant 1')
